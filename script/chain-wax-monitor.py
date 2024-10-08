@@ -1,7 +1,19 @@
 import argparse
+import boto3
 import logging
+import os
 import requests
 import json
+
+logging.basicConfig(
+    format="{asctime} - {levelname} - {message}",
+    style="{",
+    datefmt="%Y-%m-%d %H:%M",
+    level=os.environ.get('LOG_LEVEL','INFO')
+)
+
+def get_gear_stats(gear_id,gear_table):
+    dynamo_clien
 
 def split_activities(activities_raw):
     # drop "type":"VirtualRide" activities and related gearid
@@ -10,32 +22,44 @@ def split_activities(activities_raw):
     # Replace \\" with '
     # Replace \' with space
     for activity in activities_raw:
-        print(activity["name"])
+        logging.info("Parsing '"+activity["name"]+"'")
         if activity["type"] == "VirtualRide":
+            logging.debug("Skipping a Virtual Ride")
             continue
-        if activity["gear_id"] in activities_grouped.keys():
-            activities_grouped[activity["gear_id"]].append(activity)
-        else:
-            activities_grouped.setdefault(activity["gear_id"],[activity])
 
-    print(activities_grouped)
+        activity_summary = {
+            "name": activity["name"],
+            "upload_id": activity["upload_id"],
+            "distance": activity["distance"]
+        }
+        if activity["gear_id"] in activities_grouped.keys():
+            logging.debug("Appending activity to list for gear ID "+activity["gear_id"])
+            activities_grouped[activity["gear_id"]].append(activity_summary)
+        else:
+            logging.debug("Starting a new list of activities for gear ID "+activity["gear_id"])
+            activities_grouped.setdefault(activity["gear_id"],[activity_summary])
+
+    return(activities_grouped)
     # trim to upload_id, gear_id, distance
 
 
 if __name__ == '__main__':
+    # Runtime arguments
     parser = argparse.ArgumentParser(description='Check chain waxing schedule')
     parser.add_argument('--activity-file', type=str, required=False, dest='activity_file')
     parser.add_argument('--activity-days', type=int, default=7, required=False, dest='activity_days')
-    parser.add_argument('--log-level', type=str, default='INFO', required=False, dest='log_level')
     parser.add_argument('--credentials', type=str, default='strava/credentials', required=False, dest='credentials')
     args = parser.parse_args()
 
-    base_url = "www.strava.com/api/v3"
+    # Environment variables
+    gear_table = os.environ.get('GEAR_TABLE','strava-gear-stats')
+    wax_reset_flag = os.environ.get('WAX_RESET','[wax]')
+    wax_wear_default = os.environ.get('WAX_WEAR',400)
 
-    numeric_level = getattr(logging, (args.log_level).upper(), None)
-    if not isinstance(numeric_level, int):
-        raise ValueError('Invalid log level: %s' % args.log_level)
-    logging.basicConfig(level=numeric_level)
+    # AWS Clients
+    dynamodb_client=boto3.client('dynamodb')
+
+    base_url = "www.strava.com/api/v3"
 
     # Use supplied activities file
     if args.activity_file:
@@ -66,20 +90,62 @@ if __name__ == '__main__':
             activities_raw = json.loads(response.content)
     
     
-    # inputs: mileage threshold, activity lookback
-    # dynamodb table: gearid, common name, current mileage, last updated
+    # inputs: distance threshold, activity lookback
+    # dynamodb table: gearid, common name, current distance, last updated
 
     # split activities per gear id
-    split_activities(activities_raw)
+    logging.info("Splitting activities up by gear_id")
+    activities_per_gear = split_activities(activities_raw)
             # drop "type":"VirtualRide" activities and related gearid
             # trim to upload_id, gear_id, distance
     # for each gear_id
-        # get existing mileage, upload_id from dynamodb
+    for gear_id in activities_per_gear:
+        logging.info("Processing acitvities for gear ID "+gear_id)
+        # get existing distance, upload_id from dynamodb
+        logging.info("Retrieving last distance and activity_id")
+        distance,last_activity_id = get_gear_stats(gear_id,gear_table,dynamodb_client)
+        logging.debug(f"Starting distance: {distance}")
+        logging.debug(f"Last acitvity ID: {last_activity_id}")
+
         # find last upload_id, trim older activities
-        # add mileage from each activity
-        # if activity includes flag, start mileage count
-        # post mileage count to dynamodb
-        # if mileage within 10% of threshold, send SNS message
+        new_activities = []
+        found_last_activity = False
+        for activity in activities_per_gear[gear_id]:
+            # Found the previous last upload, new distance is on the next activity
+            if activity.upload_id == last_activity_id:
+                logging.info("Found the last processed activity.")
+                found_last_activity = True
+                continue
+            # Skip to next activity if we haven't found the previous last activity yet
+            if not found_last_activity:
+                logging.debug(f"Skipping activitiy ID: {activity.upload_id}")
+                continue
+
+            # Assume that all remaining activities are new
+
+            # Reset the distance counter if the activity name includes the configured flag, indicating a freshly waxed chain 
+            if wax_reset_flag in activity.name:
+                logging.info(f"Found reset flag '{wax_reset_flag}' in '{activity.name}', resetting distance for {gear_id}")
+                distance=0
+
+            distance += int(activity.distance)
+            newest_activity_id = activity.upload_id
+            logging.debug(f"Distance: {distance} - Newest Activity: {newest_activity_id}")
+
+        update_gear_stats(gear_id,gear_table,distance,newest_activity_id,dynamodb_client)
+
+        # Convert current distance from meters to miles
+        distance_miles = distance * 0.0006213712
+
+        miles_left = wax_wear_default - distance_miles
+        if miles_left < 50:
+            logging.info(f"{gear_id} has {miles_left} miles left on current chain wax coat.")
+            send_rewax_notice(gear_id,distance_miles)
+
+        # add distance from each activity
+        # if activity includes flag, start distance count
+        # post distance count to dynamodb
+        # if distance within 10% of threshold, send SNS message
     
 
 
