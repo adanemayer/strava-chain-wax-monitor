@@ -12,8 +12,20 @@ logging.basicConfig(
     level=os.environ.get('LOG_LEVEL','INFO')
 )
 
-def get_gear_stats(gear_id,gear_table):
-    dynamo_clien
+def get_gear_stats(gear_id,gear_table,dynamodb_client):
+    return
+
+def send_rewax_notice(gear_id,distance_miles,miles_left,sns_client):
+    topic_arn = os.environ.get('NOTIFY_TOPIC_ARN')
+    try:
+        sns_response = sns_client.publish(
+            TopicArn=topic_arn,
+            Message=f'Bike {gear_id} > Current miles: {distance_miles} / Miles left: {miles_left}',
+            Subject=f'Time to wax {gear_id}',
+        )
+        logging.debug(sns_response)
+    except Exception as e:
+        logging.error(e)
 
 def split_activities(activities_raw):
     # drop "type":"VirtualRide" activities and related gearid
@@ -43,6 +55,25 @@ def split_activities(activities_raw):
     # trim to upload_id, gear_id, distance
 
 
+def update_gear_stats(gear_id,gear_table,distance,newest_activity_id,dynamodb_client):
+    try:
+        logging.info(f'Updating stats for {gear_id}')
+        gear_update_response = dynamodb_client.update_item(
+            TableName = gear_table,
+            Key={'gear_id': gear_id},
+            AttributeUpdates={
+                'distance': distance,
+                'newest_activity_id': newest_activity_id
+            }
+        )
+        logging.debug(gear_update_response)
+        return gear_update_response
+    except Exception as e:
+        logging.error(e)    
+
+
+
+
 if __name__ == '__main__':
     # Runtime arguments
     parser = argparse.ArgumentParser(description='Check chain waxing schedule')
@@ -58,6 +89,7 @@ if __name__ == '__main__':
 
     # AWS Clients
     dynamodb_client=boto3.client('dynamodb')
+    sns_client=boto3.client('sns')
 
     base_url = "www.strava.com/api/v3"
 
@@ -132,15 +164,20 @@ if __name__ == '__main__':
             newest_activity_id = activity.upload_id
             logging.debug(f"Distance: {distance} - Newest Activity: {newest_activity_id}")
 
-        update_gear_stats(gear_id,gear_table,distance,newest_activity_id,dynamodb_client)
+        logging.info(f'Updating stats for {gear_id}')
+        gear_update_response = update_gear_stats(gear_id,gear_table,distance,newest_activity_id,dynamodb_client)
 
         # Convert current distance from meters to miles
         distance_miles = distance * 0.0006213712
 
         miles_left = wax_wear_default - distance_miles
+        logging.debug(f'Miles left for {gear_id}: {miles_left}')
         if miles_left < 50:
             logging.info(f"{gear_id} has {miles_left} miles left on current chain wax coat.")
-            send_rewax_notice(gear_id,distance_miles)
+            send_rewax_notice(gear_id,distance_miles,miles_left,sns_client)
+        else:
+            logging.debug(f"{gear_id} has {miles_left} miles left on current chain wax coat.")
+
 
         # add distance from each activity
         # if activity includes flag, start distance count
