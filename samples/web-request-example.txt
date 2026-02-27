@@ -1,0 +1,16 @@
+curl -X POST https://www.strava.com/oauth/token \
+-F client_id=122423 \
+-F client_secret=75c03ae9fd78b86bf96e765305e05ce47aab78c4 \
+-F code=7c93768a1701b42e80b870d944b3c47d4a604e38 \
+-F grant_type=authorization_code
+
+
+curl -X GET https://www.strava.com/oauth/authorize \
+-F client_id=122423 \
+-F redirect_uri=localhost \
+-F response_type=code \
+-F scope="activity:read_all" \
+-F client_secret=75c03ae9fd78b86bf96e765305e05ce47aab78c4 \
+-F code=7c93768a1701b42e80b870d944b3c47d4a604e38
+
+https://www.strava.com/oauth/authorize?client_id=122423&response_type=code&redirect_uri=http://localhost/exchange_token&approval_prompt=force&scope=activity:read_all
