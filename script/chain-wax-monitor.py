@@ -12,8 +12,31 @@ logging.basicConfig(
     level=os.environ.get('LOG_LEVEL','INFO')
 )
 
-def get_gear_stats(gear_id,gear_table,dynamodb_client):
-    return
+def get_gear_stats(gear_id, gear_table, dynamodb_client):
+    try:
+        response = dynamodb_client.get_item(
+            TableName=gear_table,
+            Key={'gear_id': {'S': gear_id}}
+        )
+    except Exception as e:
+        logging.error(e)
+        return 0.0, None, 0.0
+
+    item = response.get('Item', {})
+    distance_miles = float(item.get('distance_miles', {}).get('N', '0'))
+    newest_activity_id = item.get('newest_activity_id', {}).get('N')
+    reset_gear_miles = float(item.get('reset_gear_miles', {}).get('N', '0'))
+    return distance_miles, newest_activity_id, reset_gear_miles
+
+
+def get_gear_distance_miles(gear_id, headers, base_url):
+    response = requests.get(
+        f'https://{base_url}/gear/{gear_id}',
+        headers=headers
+    )
+    response.raise_for_status()
+    gear = response.json()
+    return float(gear.get('distance', 0)) * 0.0006213712
 
 def send_rewax_notice(gear_id,distance_miles,miles_left,sns_client):
     topic_arn = os.environ.get('NOTIFY_TOPIC_ARN')
@@ -55,15 +78,16 @@ def split_activities(activities_raw):
     # trim to upload_id, gear_id, distance
 
 
-def update_gear_stats(gear_id,gear_table,distance,newest_activity_id,dynamodb_client):
+def update_gear_stats(gear_id, gear_table, distance_miles, newest_activity_id, reset_gear_miles, dynamodb_client):
     try:
         logging.info(f'Updating stats for {gear_id}')
-        gear_update_response = dynamodb_client.update_item(
-            TableName = gear_table,
-            Key={'gear_id': gear_id},
-            AttributeUpdates={
-                'distance': distance,
-                'newest_activity_id': newest_activity_id
+        gear_update_response = dynamodb_client.put_item(
+            TableName=gear_table,
+            Item={
+                'gear_id': {'S': gear_id},
+                'distance_miles': {'N': f'{distance_miles}'},
+                'newest_activity_id': {'N': f'{newest_activity_id}'} if newest_activity_id is not None else {'N': '0'},
+                'reset_gear_miles': {'N': f'{reset_gear_miles}'}
             }
         )
         logging.debug(gear_update_response)
@@ -92,6 +116,7 @@ if __name__ == '__main__':
     sns_client=boto3.client('sns')
 
     base_url = "www.strava.com/api/v3"
+    headers = None
 
     # Use supplied activities file
     if args.activity_file:
@@ -109,17 +134,16 @@ if __name__ == '__main__':
         # Pull credentials from a remote store (AWS)
         else:
             logging.info("Retrieving credentials from Secrets Manager Secret '%s'", args.credentials)
-        
-            # Get activities
-            auth_code = "7c93768a1701b42e80b870d944b3c47d4a604e38"
-            token="32fac19add3740c79c04fa5c09d1fb138d27a3ad" #< retrieved based>
-            headers = {'Authorization': "Bearer {}".format(token)}
-            response = requests.get(
-                f'https://{base_url}/athlete/activities',
-                headers=headers
-            )
 
-            activities_raw = json.loads(response.content)
+        # TODO: Replace with secret retrieval flow
+        token = os.environ.get('STRAVA_TOKEN', "32fac19add3740c79c04fa5c09d1fb138d27a3ad")
+        headers = {'Authorization': f"Bearer {token}"}
+        response = requests.get(
+            f'https://{base_url}/athlete/activities',
+            headers=headers
+        )
+
+        activities_raw = json.loads(response.content)
     
     
     # inputs: distance threshold, activity lookback
@@ -135,42 +159,49 @@ if __name__ == '__main__':
         logging.info("Processing acitvities for gear ID "+gear_id)
         # get existing distance, upload_id from dynamodb
         logging.info("Retrieving last distance and activity_id")
-        distance,last_activity_id = get_gear_stats(gear_id,gear_table,dynamodb_client)
-        logging.debug(f"Starting distance: {distance}")
+        distance_miles,last_activity_id,reset_gear_miles = get_gear_stats(gear_id,gear_table,dynamodb_client)
+        logging.debug(f"Starting distance: {distance_miles}")
         logging.debug(f"Last acitvity ID: {last_activity_id}")
 
         # find last upload_id, trim older activities
         new_activities = []
-        found_last_activity = False
-        for activity in activities_per_gear[gear_id]:
-            # Found the previous last upload, new distance is on the next activity
-            if activity.upload_id == last_activity_id:
+        newest_activity_id = int(last_activity_id) if last_activity_id else None
+        for idx, activity in enumerate(activities_per_gear[gear_id]):
+            if idx == 0:
+                newest_activity_id = activity["upload_id"]
+            if last_activity_id and str(activity["upload_id"]) == str(last_activity_id):
                 logging.info("Found the last processed activity.")
-                found_last_activity = True
-                continue
-            # Skip to next activity if we haven't found the previous last activity yet
-            if not found_last_activity:
-                logging.debug(f"Skipping activitiy ID: {activity.upload_id}")
-                continue
+                break
+            new_activities.append(activity)
 
-            # Assume that all remaining activities are new
+        if headers:
+            current_gear_miles = get_gear_distance_miles(gear_id, headers, base_url)
+        else:
+            added_miles = sum(a["distance"] for a in new_activities) * 0.0006213712
+            current_gear_miles = distance_miles + added_miles + reset_gear_miles
+        logging.debug(f"Current gear miles for {gear_id}: {current_gear_miles}")
 
-            # Reset the distance counter if the activity name includes the configured flag, indicating a freshly waxed chain 
-            if wax_reset_flag in activity.name:
-                logging.info(f"Found reset flag '{wax_reset_flag}' in '{activity.name}', resetting distance for {gear_id}")
-                distance=0
+        miles_since_reset = current_gear_miles - reset_gear_miles
+        for activity in reversed(new_activities):
+            if wax_reset_flag in activity["name"]:
+                logging.info(f"Found reset flag '{wax_reset_flag}' in '{activity['name']}', resetting distance for {gear_id}")
+                distance_after_reset = sum(a["distance"] for a in new_activities if a["upload_id"] >= activity["upload_id"]) * 0.0006213712
+                reset_gear_miles = max(current_gear_miles - distance_after_reset, 0)
+                miles_since_reset = distance_after_reset
 
-            distance += int(activity.distance)
-            newest_activity_id = activity.upload_id
-            logging.debug(f"Distance: {distance} - Newest Activity: {newest_activity_id}")
 
+        distance_miles = miles_since_reset
         logging.info(f'Updating stats for {gear_id}')
-        gear_update_response = update_gear_stats(gear_id,gear_table,distance,newest_activity_id,dynamodb_client)
+        gear_update_response = update_gear_stats(
+            gear_id,
+            gear_table,
+            distance_miles,
+            newest_activity_id,
+            reset_gear_miles,
+            dynamodb_client
+        )
 
-        # Convert current distance from meters to miles
-        distance_miles = distance * 0.0006213712
-
-        miles_left = wax_wear_default - distance_miles
+        miles_left = float(wax_wear_default) - distance_miles
         logging.debug(f'Miles left for {gear_id}: {miles_left}')
         if miles_left < 50:
             logging.info(f"{gear_id} has {miles_left} miles left on current chain wax coat.")
@@ -184,5 +215,4 @@ if __name__ == '__main__':
         # post distance count to dynamodb
         # if distance within 10% of threshold, send SNS message
     
-
 
