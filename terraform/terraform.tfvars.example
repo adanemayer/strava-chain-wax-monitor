@@ -1,0 +1,11 @@
+environment                = "dev"
+aws_region                 = "us-east-1"
+gear_table_name            = "strava-gear-stats"
+sns_topic_name             = "chain-wax-monitor-notifications"
+subscriber_email           = "replace-with-your-email@example.com"
+strava_token               = "replace-with-strava-token"
+lambda_schedule_expression = "rate(1 day)"
+
+# tags = {
+#   Team = "platform"
+# }
