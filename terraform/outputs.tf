@@ -13,6 +13,16 @@ output "execution_policy_arn" {
   value       = aws_iam_policy.chain_wax_monitor.arn
 }
 
+output "strava_credentials_secret_name" {
+  description = "Secrets Manager secret name used by the Lambda function for Strava credentials."
+  value       = aws_secretsmanager_secret.strava_credentials.name
+}
+
+output "strava_credentials_secret_arn" {
+  description = "Secrets Manager secret ARN used by the Lambda function for Strava credentials."
+  value       = aws_secretsmanager_secret.strava_credentials.arn
+}
+
 output "lambda_function_name" {
   description = "Name of the deployed chain-wax monitor Lambda function."
   value       = aws_lambda_function.chain_wax_monitor.function_name

@@ -3,7 +3,12 @@ aws_region                 = "us-east-1"
 gear_table_name            = "strava-gear-stats"
 sns_topic_name             = "chain-wax-monitor-notifications"
 subscriber_email           = "replace-with-your-email@example.com"
-strava_token               = "replace-with-strava-token"
+strava_secret_name         = "strava/credentials"
+strava_access_token        = "replace-with-strava-access-token"
+# strava_client_id         = "replace-with-strava-client-id"
+# strava_client_secret     = "replace-with-strava-client-secret"
+# strava_refresh_token     = "replace-with-strava-refresh-token"
+# strava_token_expires_at  = 1735689600
 lambda_schedule_expression = "rate(1 day)"
 
 # tags = {

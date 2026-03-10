@@ -5,4 +5,5 @@ Monitor the chain wax schedule for your bike!
 
 Terraform configuration for required AWS resources is available in [`terraform/`](terraform/).
 The Terraform module supports an `environment` variable that prefixes all created resource names,
-and includes scheduled Lambda infrastructure that packages the script into a local zip before upload.
+includes a Secrets Manager-backed Strava credential setup for the Lambda runtime,
+and packages the script into a local zip before upload.

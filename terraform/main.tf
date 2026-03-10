@@ -29,6 +29,7 @@ locals {
   lambda_role_name = "${local.name_prefix}chain-wax-monitor-lambda-role"
   lambda_name      = "${local.name_prefix}chain-wax-monitor"
   lambda_rule_name = "${local.name_prefix}chain-wax-monitor-schedule"
+  strava_secret    = "${local.name_prefix}${replace(var.strava_secret_name, "/", "-")}"
 
   default_tags = {
     Environment = var.environment
@@ -59,6 +60,22 @@ resource "aws_sns_topic_subscription" "rewax_email" {
   topic_arn = aws_sns_topic.rewax_notifications.arn
   protocol  = "email"
   endpoint  = var.subscriber_email
+}
+
+resource "aws_secretsmanager_secret" "strava_credentials" {
+  name = local.strava_secret
+  tags = local.merged_tags
+}
+
+resource "aws_secretsmanager_secret_version" "strava_credentials" {
+  secret_id = aws_secretsmanager_secret.strava_credentials.id
+  secret_string = jsonencode({
+    access_token  = var.strava_access_token
+    client_id     = var.strava_client_id
+    client_secret = var.strava_client_secret
+    refresh_token = var.strava_refresh_token
+    expires_at    = var.strava_token_expires_at > 0 ? var.strava_token_expires_at : null
+  })
 }
 
 data "archive_file" "lambda_zip" {
@@ -125,6 +142,18 @@ data "aws_iam_policy_document" "chain_wax_monitor" {
 
     resources = [aws_sns_topic.rewax_notifications.arn]
   }
+
+  statement {
+    sid    = "StravaCredentialsSecretAccess"
+    effect = "Allow"
+
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:UpdateSecret"
+    ]
+
+    resources = [aws_secretsmanager_secret.strava_credentials.arn]
+  }
 }
 
 resource "aws_iam_policy" "chain_wax_monitor" {
@@ -160,7 +189,7 @@ resource "aws_lambda_function" "chain_wax_monitor" {
       WAX_WEAR         = tostring(var.wax_wear)
       WAX_RESET        = var.wax_reset_flag
       LOG_LEVEL        = var.log_level
-      STRAVA_TOKEN     = var.strava_token
+      STRAVA_CREDENTIALS = aws_secretsmanager_secret.strava_credentials.name
     }
   }
 
