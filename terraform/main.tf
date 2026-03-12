@@ -200,7 +200,7 @@ resource "aws_cloudwatch_event_rule" "chain_wax_monitor" {
   name                = local.lambda_rule_name
   description         = "Schedule for the chain wax monitor lambda"
   schedule_expression = var.lambda_schedule_expression
-  is_enabled          = var.lambda_schedule_enabled
+  state               = var.lambda_schedule_enabled ? "ENABLED" : "DISABLED"
 
   tags = local.merged_tags
 }
