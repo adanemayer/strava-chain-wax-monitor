@@ -28,11 +28,44 @@ variable "subscriber_email" {
   default     = "you@example.com"
 }
 
-variable "strava_token" {
-  description = "Strava API token used by the monitor script."
+variable "strava_secret_name" {
+  description = "Secrets Manager secret name that stores Strava API credentials for the Lambda runtime."
+  type        = string
+  default     = "strava/credentials"
+}
+
+variable "strava_access_token" {
+  description = "Current Strava access token stored in Secrets Manager."
   type        = string
   default     = ""
   sensitive   = true
+}
+
+variable "strava_client_id" {
+  description = "Optional Strava client ID used to refresh expiring access tokens."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "strava_client_secret" {
+  description = "Optional Strava client secret used to refresh expiring access tokens."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "strava_refresh_token" {
+  description = "Optional Strava refresh token used to rotate access tokens."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "strava_token_expires_at" {
+  description = "Optional Strava access token expiry timestamp (unix epoch seconds)."
+  type        = number
+  default     = 0
 }
 
 variable "wax_wear" {

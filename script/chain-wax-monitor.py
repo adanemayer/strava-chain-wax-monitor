@@ -2,9 +2,9 @@ import argparse
 import boto3
 import logging
 import os
-import requests
 import json
 import time
+from urllib import error, parse, request
 
 logging.basicConfig(
     format="{asctime} - {levelname} - {message}",
@@ -31,39 +31,42 @@ def get_gear_stats(gear_id, gear_table, dynamodb_client):
 
 
 def get_gear_distance_miles(gear_id, headers, base_url):
-    response = requests.get(
+    gear = http_json_request(
         f'https://{base_url}/gear/{gear_id}',
         headers=headers
     )
-    response.raise_for_status()
-    gear = response.json()
     return float(gear.get('distance', 0)) * 0.0006213712
 
-def get_gear_stats(gear_id, gear_table, dynamodb_client):
+
+def http_json_request(url, method='GET', headers=None, form_data=None):
+    encoded_form_data = None
+    request_headers = headers or {}
+    if form_data is not None:
+        encoded_form_data = parse.urlencode(form_data).encode('utf-8')
+        request_headers = {
+            **request_headers,
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
+
+    req = request.Request(
+        url,
+        data=encoded_form_data,
+        headers=request_headers,
+        method=method
+    )
     try:
-        response = dynamodb_client.get_item(
-            TableName=gear_table,
-            Key={'gear_id': {'S': gear_id}}
+        with request.urlopen(req) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except error.HTTPError as exc:
+        error_body = exc.read().decode('utf-8', errors='replace')
+        logging.error(
+            "HTTP request failed: method=%s url=%s status=%s body=%s",
+            method,
+            url,
+            exc.code,
+            error_body
         )
-    except Exception as e:
-        logging.error(e)
-        return 0.0, None, 0.0
-
-    item = response.get('Item', {})
-    distance_miles = float(item.get('distance_miles', {}).get('N', '0'))
-    newest_activity_id = item.get('newest_activity_id', {}).get('N')
-    reset_gear_miles = float(item.get('reset_gear_miles', {}).get('N', '0'))
-    return distance_miles, newest_activity_id, reset_gear_miles
-
-
-def get_gear_distance_miles(gear_id, headers, base_url):
-    response = requests.get(
-        f'https://{base_url}/gear/{gear_id}',
-        headers=headers
-    )
-    response.raise_for_status()
-    gear = response.json()
-    return float(gear.get('distance', 0)) * 0.0006213712
+        raise
 
 
 def send_rewax_notice(gear_id, distance_miles, miles_left, sns_client):
@@ -87,6 +90,9 @@ def split_activities(activities_raw):
         logging.info("Parsing '%s'", activity["name"])
         if activity["type"] == "VirtualRide":
             logging.debug("Skipping a Virtual Ride")
+            continue
+        if not activity.get("gear_id"):
+            logging.debug("Skipping activity without gear assignment")
             continue
 
         activity_summary = {
@@ -135,17 +141,16 @@ def load_credentials(credentials_arg, secrets_client):
 
 
 def refresh_strava_token(credentials):
-    response = requests.post(
+    token_payload = http_json_request(
         'https://www.strava.com/oauth/token',
-        data={
+        method='POST',
+        form_data={
             'client_id': credentials['client_id'],
             'client_secret': credentials['client_secret'],
             'grant_type': 'refresh_token',
             'refresh_token': credentials['refresh_token']
         }
     )
-    response.raise_for_status()
-    token_payload = response.json()
     credentials.update(token_payload)
     return credentials
 
@@ -155,13 +160,13 @@ def get_strava_headers(credentials_arg, secrets_client):
 
     required_keys = ['access_token']
     for key in required_keys:
-        if key not in credentials:
+        if not credentials.get(key):
             raise ValueError(f"Missing required credential field '{key}'")
 
     # If token is close to expiring and refresh metadata is available, refresh.
     expires_at = credentials.get('expires_at')
     can_refresh = all(
-        key in credentials
+        credentials.get(key)
         for key in ['client_id', 'client_secret', 'refresh_token']
     )
     if expires_at and can_refresh and int(expires_at) <= int(time.time()) + 120:
@@ -181,7 +186,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Check chain waxing schedule')
     parser.add_argument('--activity-file', type=str, required=False, dest='activity_file')
     parser.add_argument('--activity-days', type=int, default=7, required=False, dest='activity_days')
-    parser.add_argument('--credentials', type=str, default='strava/credentials', required=False, dest='credentials')
+    parser.add_argument(
+        '--credentials',
+        type=str,
+        default=os.environ.get('STRAVA_CREDENTIALS', 'strava/credentials'),
+        required=False,
+        dest='credentials'
+    )
     args = parser.parse_args()
 
     gear_table = os.environ.get('GEAR_TABLE', 'strava-gear-stats')
@@ -201,22 +212,18 @@ if __name__ == '__main__':
             activities_raw = json.load(f)
     else:
         logging.info("Retrieving activities from past %s days", args.activity_days)
-        # Use credentials from a local file
-        if "json" in args.credentials:
-            logging.info("Using credentials file %s", args.credentials)
-        # Pull credentials from a remote store (AWS)
+        if args.credentials:
+            headers = get_strava_headers(args.credentials, secrets_client)
         else:
-            logging.info("Retrieving credentials from Secrets Manager Secret '%s'", args.credentials)
+            token = os.environ.get('STRAVA_TOKEN')
+            if not token:
+                raise ValueError('Set STRAVA_CREDENTIALS or STRAVA_TOKEN before running the monitor')
+            headers = {'Authorization': f"Bearer {token}"}
 
-        # TODO: Replace with secret retrieval flow
-        token = os.environ.get('STRAVA_TOKEN', "32fac19add3740c79c04fa5c09d1fb138d27a3ad")
-        headers = {'Authorization': f"Bearer {token}"}
-        response = requests.get(
+        activities_raw = http_json_request(
             f'https://{base_url}/athlete/activities',
             headers=headers
         )
-
-        activities_raw = json.loads(response.content)
     
     
     # inputs: distance threshold, activity lookback
@@ -283,4 +290,3 @@ if __name__ == '__main__':
         # post distance count to dynamodb
         # if distance within 10% of threshold, send SNS message
     
-

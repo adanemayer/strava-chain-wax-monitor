@@ -1,0 +1,7 @@
+.terraform/
+.tfstate/
+.lambda/
+terraform/.terraform/
+terraform/*.tfplan
+terraform/terraform.tfvars
+__pycache__/
