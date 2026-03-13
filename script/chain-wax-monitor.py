@@ -4,7 +4,7 @@ import logging
 import os
 import json
 import time
-from urllib import parse, request
+from urllib import error, parse, request
 
 logging.basicConfig(
     format="{asctime} - {levelname} - {message}",
@@ -54,8 +54,19 @@ def http_json_request(url, method='GET', headers=None, form_data=None):
         headers=request_headers,
         method=method
     )
-    with request.urlopen(req) as response:
-        return json.loads(response.read().decode('utf-8'))
+    try:
+        with request.urlopen(req) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except error.HTTPError as exc:
+        error_body = exc.read().decode('utf-8', errors='replace')
+        logging.error(
+            "HTTP request failed: method=%s url=%s status=%s body=%s",
+            method,
+            url,
+            exc.code,
+            error_body
+        )
+        raise
 
 
 def send_rewax_notice(gear_id, distance_miles, miles_left, sns_client):
