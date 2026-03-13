@@ -54,5 +54,6 @@ After apply:
 - Lambda uses `GEAR_TABLE` and `NOTIFY_TOPIC_ARN` automatically.
 - Lambda reads Strava credentials from Secrets Manager via `STRAVA_CREDENTIALS`.
 - If `strava_client_id`, `strava_client_secret`, `strava_refresh_token`, and `strava_token_expires_at` are set, the Lambda refreshes expiring Strava tokens and writes the updated value back to the same secret.
+- Terraform ignores future `secret_string` drift on the Strava secret version so manual or runtime token rotation does not get overwritten on the next plan/apply.
 - Attach `execution_policy_arn` only if you run the script outside Lambda.
 - Confirm SNS email subscription from your inbox before notifications are delivered.

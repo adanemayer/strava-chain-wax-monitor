@@ -91,6 +91,9 @@ def split_activities(activities_raw):
         if activity["type"] == "VirtualRide":
             logging.debug("Skipping a Virtual Ride")
             continue
+        if not activity.get("gear_id"):
+            logging.debug("Skipping activity without gear assignment")
+            continue
 
         activity_summary = {
             "name": activity["name"],

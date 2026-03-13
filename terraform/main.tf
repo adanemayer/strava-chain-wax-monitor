@@ -76,6 +76,10 @@ resource "aws_secretsmanager_secret_version" "strava_credentials" {
     refresh_token = var.strava_refresh_token
     expires_at    = var.strava_token_expires_at > 0 ? var.strava_token_expires_at : null
   })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
 }
 
 data "archive_file" "lambda_zip" {
