@@ -30,12 +30,12 @@ def get_gear_stats(gear_id, gear_table, dynamodb_client):
     return distance_miles, newest_activity_id, reset_gear_miles
 
 
-def get_gear_distance_miles(gear_id, headers, base_url):
+def get_gear_details(gear_id, headers, base_url):
     gear = http_json_request(
         f'https://{base_url}/gear/{gear_id}',
         headers=headers
     )
-    return float(gear.get('distance', 0)) * 0.0006213712
+    return gear.get('name', gear_id), float(gear.get('distance', 0)) * 0.0006213712
 
 
 def http_json_request(url, method='GET', headers=None, form_data=None):
@@ -69,13 +69,13 @@ def http_json_request(url, method='GET', headers=None, form_data=None):
         raise
 
 
-def send_rewax_notice(gear_id, distance_miles, miles_left, sns_client):
+def send_rewax_notice(gear_name, distance_miles, miles_left, sns_client):
     topic_arn = os.environ.get('NOTIFY_TOPIC_ARN')
     try:
         sns_response = sns_client.publish(
             TopicArn=topic_arn,
-            Message=f'Bike {gear_id} > Current miles: {distance_miles} / Miles left: {miles_left}',
-            Subject=f'Time to wax {gear_id}',
+            Message=f'Bike {gear_name} > Current miles: {distance_miles} / Miles left: {miles_left}',
+            Subject=f'Time to wax {gear_name}',
         )
         logging.debug(sns_response)
     except Exception as e:
@@ -110,13 +110,14 @@ def split_activities(activities_raw):
     return activities_grouped
 
 
-def update_gear_stats(gear_id, gear_table, distance_miles, newest_activity_id, reset_gear_miles, dynamodb_client):
+def update_gear_stats(gear_id, gear_name, gear_table, distance_miles, newest_activity_id, reset_gear_miles, dynamodb_client):
     try:
-        logging.info(f'Updating stats for {gear_id}')
+        logging.info(f'Updating stats for {gear_name}')
         gear_update_response = dynamodb_client.put_item(
             TableName=gear_table,
             Item={
                 'gear_id': {'S': gear_id},
+                'gear_name': {'S': gear_name},
                 'distance_miles': {'N': f'{distance_miles}'},
                 'newest_activity_id': {'N': f'{newest_activity_id}'} if newest_activity_id is not None else {'N': '0'},
                 'reset_gear_miles': {'N': f'{reset_gear_miles}'}
@@ -234,7 +235,12 @@ if __name__ == '__main__':
 
     for gear_id in activities_per_gear:
         logging.info("Processing acitvities for gear ID %s", gear_id)
-        logging.info("Retrieving last distance and activity_id")
+        gear_name = gear_id
+        current_gear_miles = None
+        if headers:
+            gear_name, current_gear_miles = get_gear_details(gear_id, headers, base_url)
+
+        logging.info("Retrieving last distance and activity_id for %s", gear_name)
         distance_miles,last_activity_id,reset_gear_miles = get_gear_stats(gear_id,gear_table,dynamodb_client)
         logging.debug(f"Starting distance: {distance_miles}")
         logging.debug(f"Last acitvity ID: {last_activity_id}")
@@ -249,26 +255,25 @@ if __name__ == '__main__':
                 break
             new_activities.append(activity)
 
-        if headers:
-            current_gear_miles = get_gear_distance_miles(gear_id, headers, base_url)
-        else:
+        if current_gear_miles is None:
             added_miles = sum(a["distance"] for a in new_activities) * 0.0006213712
             current_gear_miles = distance_miles + added_miles + reset_gear_miles
-        logging.debug(f"Current gear miles for {gear_id}: {current_gear_miles}")
+        logging.debug(f"Current gear miles for {gear_name}: {current_gear_miles}")
 
         miles_since_reset = current_gear_miles - reset_gear_miles
         for activity in reversed(new_activities):
             if wax_reset_flag in activity["name"]:
-                logging.info(f"Found reset flag '{wax_reset_flag}' in '{activity['name']}', resetting distance for {gear_id}")
+                logging.info(f"Found reset flag '{wax_reset_flag}' in '{activity['name']}', resetting distance for {gear_name}")
                 distance_after_reset = sum(a["distance"] for a in new_activities if a["upload_id"] >= activity["upload_id"]) * 0.0006213712
                 reset_gear_miles = max(current_gear_miles - distance_after_reset, 0)
                 miles_since_reset = distance_after_reset
 
 
         distance_miles = miles_since_reset
-        logging.info(f'Updating stats for {gear_id}')
+        logging.info(f'Updating stats for {gear_name}')
         gear_update_response = update_gear_stats(
             gear_id,
+            gear_name,
             gear_table,
             distance_miles,
             newest_activity_id,
@@ -277,12 +282,12 @@ if __name__ == '__main__':
         )
 
         miles_left = float(wax_wear_default) - distance_miles
-        logging.debug(f'Miles left for {gear_id}: {miles_left}')
+        logging.debug(f'Miles left for {gear_name}: {miles_left}')
         if miles_left < 50:
-            logging.info(f"{gear_id} has {miles_left} miles left on current chain wax coat.")
-            send_rewax_notice(gear_id, distance_miles, miles_left, sns_client)
+            logging.info(f"{gear_name} has {miles_left} miles left on current chain wax coat.")
+            send_rewax_notice(gear_name, distance_miles, miles_left, sns_client)
         else:
-            logging.debug(f"{gear_id} has {miles_left} miles left on current chain wax coat.")
+            logging.debug(f"{gear_name} has {miles_left} miles left on current chain wax coat.")
 
 
         # add distance from each activity
