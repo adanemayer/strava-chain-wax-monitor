@@ -32,3 +32,8 @@ output "lambda_role_arn" {
   description = "IAM role ARN assumed by the Lambda function."
   value       = aws_iam_role.chain_wax_monitor_lambda.arn
 }
+
+output "no_executions_alarm_arn" {
+  description = "CloudWatch alarm ARN that fires (and notifies notify_topic_arn) when the lambda hasn't run recently."
+  value       = aws_cloudwatch_metric_alarm.no_executions.arn
+}

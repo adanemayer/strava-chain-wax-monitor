@@ -116,6 +116,12 @@ variable "lambda_schedule_enabled" {
   default     = true
 }
 
+variable "no_execution_alarm_hours" {
+  description = "Hours of zero lambda invocations before the no-executions CloudWatch alarm fires."
+  type        = number
+  default     = 48
+}
+
 variable "tags" {
   description = "Optional tags applied to created resources."
   type        = map(string)
