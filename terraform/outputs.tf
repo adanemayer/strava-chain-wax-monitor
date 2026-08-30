@@ -37,3 +37,8 @@ output "no_executions_alarm_arn" {
   description = "CloudWatch alarm ARN that fires (and notifies notify_topic_arn) when the lambda hasn't run recently."
   value       = aws_cloudwatch_metric_alarm.no_executions.arn
 }
+
+output "invocation_errors_alarm_arn" {
+  description = "CloudWatch alarm ARN that fires (and notifies notify_topic_arn) when the lambda raises errors."
+  value       = aws_cloudwatch_metric_alarm.invocation_errors.arn
+}
