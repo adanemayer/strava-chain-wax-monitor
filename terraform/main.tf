@@ -222,3 +222,45 @@ resource "aws_lambda_permission" "allow_eventbridge" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.chain_wax_monitor.arn
 }
+
+resource "aws_cloudwatch_metric_alarm" "no_executions" {
+  alarm_name        = "${local.name_prefix}chain-wax-monitor-no-executions"
+  alarm_description = "Alarms when the chain wax monitor lambda has not run in ${var.no_execution_alarm_hours} hours."
+  namespace         = "AWS/Lambda"
+  metric_name       = "Invocations"
+  dimensions = {
+    FunctionName = aws_lambda_function.chain_wax_monitor.function_name
+  }
+  statistic           = "Sum"
+  period              = var.no_execution_alarm_hours * 3600
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
+
+  alarm_actions = [aws_sns_topic.rewax_notifications.arn]
+  ok_actions    = [aws_sns_topic.rewax_notifications.arn]
+
+  tags = local.merged_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "invocation_errors" {
+  alarm_name        = "${local.name_prefix}chain-wax-monitor-errors"
+  alarm_description = "Alarms when the chain wax monitor lambda raises errors during execution."
+  namespace         = "AWS/Lambda"
+  metric_name       = "Errors"
+  dimensions = {
+    FunctionName = aws_lambda_function.chain_wax_monitor.function_name
+  }
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.rewax_notifications.arn]
+  ok_actions    = [aws_sns_topic.rewax_notifications.arn]
+
+  tags = local.merged_tags
+}
